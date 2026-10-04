@@ -1,14 +1,14 @@
 # FreshMart Supermarket Billing System
 
-A Java Swing supermarket billing demo with a checkout counter and an inventory management screen. Product details, stock, expiry dates, completed bills, and bill lines are stored in MySQL.
+A JavaFX supermarket point-of-sale demo with checkout and inventory screens. Product details, stock, optional expiry dates, completed bills, and bill lines are stored in MySQL.
 
 ## Requirements
 
-- JDK 11 or later
+- JDK 21 or later
 - MySQL Server 8.0 or later, running locally
 - MySQL Workbench (recommended for loading the schema)
 - Apache Maven 3.9 or later
-- Internet access the first time Maven downloads MySQL Connector/J and Maven plugins
+- Internet access the first time Maven downloads JavaFX, MySQL Connector/J, and Maven plugins
 
 ## Set up MySQL
 
@@ -31,15 +31,15 @@ run.bat
 Or run directly with Maven:
 
 ```bat
-mvn compile exec:java
+mvn javafx:run
 ```
 
-The first run downloads MySQL Connector/J. The project uses the official Connector/J Maven artifact `com.mysql:mysql-connector-j`.
+The first run downloads JavaFX modules and platform libraries, MySQL Connector/J, and Maven plugins. Maven manages JavaFX, so a separate JavaFX SDK installation is not required. The UI uses JavaFX 21.0.12 to match the JDK 21 baseline.
 
 ## Demo flow
 
 1. In **Inventory**, add products, search/view the catalog, edit product details, delete products, and restock stock quantities.
-2. Expiry dates use `yyyy-MM-dd`; leave the date blank for an unknown/no expiry. Regular products do not use expiry dates.
+2. Use the optional expiry date picker for perishable products; leave it blank when the date is unknown. Regular products do not use expiry dates.
 3. In **Checkout**, search a product name or type/scan its code, choose a quantity, and add it to the bill. Available stock reflects the cart reservation immediately.
 4. The application calculates near-expiry and multi-buy discounts. Products with 5 or fewer available units appear in the low-stock alert; use **Restock** in Inventory.
 5. Complete the sale to show a receipt. The bill, bill lines, and reduced stock are committed to MySQL in one transaction. Removing an item or clearing the cart releases its reserved quantity.
@@ -60,7 +60,7 @@ The scanner field accepts keyboard input, which is how many USB barcode scanners
 Cashier
    |
    v
-Swing UI (SupermarketBillingApp)
+JavaFX UI (SupermarketBillingApp)
    |
    v
 BillingService (cart, discounts, checkout)

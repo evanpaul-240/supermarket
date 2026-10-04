@@ -9,6 +9,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
+where java >nul 2>nul
+if errorlevel 1 (
+    echo Java was not found. Install JDK 21 or later and reopen Command Prompt.
+    pause
+    exit /b 1
+)
+
 if not exist config\db.properties (
     copy config\db.properties.example config\db.properties >nul
     echo Created config\db.properties from the example.
@@ -17,7 +24,7 @@ if not exist config\db.properties (
     exit /b 1
 )
 
-mvn -q compile exec:java
+mvn -q clean javafx:run
 if errorlevel 1 (
     echo.
     echo The application could not start. Check the MySQL server, database setup, and credentials.
