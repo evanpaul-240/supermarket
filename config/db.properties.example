@@ -1,0 +1,4 @@
+# Copy this file to config/db.properties and set your local MySQL credentials.
+db.url=jdbc:mysql://localhost:3306/supermarket_billing?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+db.user=root
+db.password=root

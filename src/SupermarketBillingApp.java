@@ -8,6 +8,8 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
+import javax.swing.JComboBox;
+import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
@@ -24,15 +26,20 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -46,21 +53,26 @@ public class SupermarketBillingApp extends JFrame {
     private static final Color BORDER = new Color(222, 232, 226);
     private static final Color ORANGE = new Color(177, 105, 23);
 
-    private final BillingService billingService = new BillingService(createSampleProducts());
+    private final BillingService billingService;
     private final ProductTableModel productModel = new ProductTableModel();
+    private final InventoryTableModel inventoryModel = new InventoryTableModel();
     private final CartTableModel cartModel = new CartTableModel();
     private final JTable productTable = new JTable(productModel);
+    private final JTable inventoryTable = new JTable(inventoryModel);
     private final JTable cartTable = new JTable(cartModel);
     private final JTextField searchField = new JTextField();
+    private final JTextField inventorySearchField = new JTextField();
     private final JTextField customerField = new JTextField("Walk-in Customer");
     private final JSpinner quantitySpinner = new JSpinner(new SpinnerNumberModel(1, 1, 99, 1));
     private final JLabel subtotalValue = new JLabel("₹0.00");
     private final JLabel discountValue = new JLabel("-₹0.00");
     private final JLabel totalValue = new JLabel("₹0.00");
-    private final JLabel stockAlert = new JLabel();
+    private final JButton stockAlert = new JButton();
+    private final JTabbedPane workspaceTabs = new JTabbedPane();
 
-    public SupermarketBillingApp() {
+    public SupermarketBillingApp(BillingService billingService) {
         super("FreshMart | Supermarket Billing");
+        this.billingService = billingService;
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setMinimumSize(new Dimension(1040, 680));
         setSize(1240, 790);
@@ -85,7 +97,10 @@ public class SupermarketBillingApp extends JFrame {
         right.gridx = 1; right.gridy = 0; right.weightx = 0.42; right.weighty = 1;
         right.fill = GridBagConstraints.BOTH; right.insets = new Insets(0, 12, 0, 0);
         columns.add(buildCheckoutPanel(), right);
-        root.add(columns, BorderLayout.CENTER);
+        workspaceTabs.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        workspaceTabs.addTab("Checkout", columns);
+        workspaceTabs.addTab("Inventory", buildInventoryPanel());
+        root.add(workspaceTabs, BorderLayout.CENTER);
         return root;
     }
 
@@ -97,7 +112,7 @@ public class SupermarketBillingApp extends JFrame {
         JLabel brand = new JLabel("FRESHMART");
         brand.setFont(new Font("Segoe UI", Font.BOLD, 25));
         brand.setForeground(GREEN);
-        JLabel subtitle = new JLabel("Supermarket billing desk  ·  Demo model");
+        JLabel subtitle = new JLabel("Supermarket billing desk  ·  MySQL inventory");
         subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 13));
         subtitle.setForeground(MUTED);
         titleBlock.add(brand, BorderLayout.NORTH);
@@ -112,9 +127,76 @@ public class SupermarketBillingApp extends JFrame {
         JLabel dot = new JLabel("●"); dot.setForeground(ORANGE);
         stockAlert.setFont(new Font("Segoe UI", Font.BOLD, 12));
         stockAlert.setForeground(new Color(119, 78, 25));
+        stockAlert.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
+        stockAlert.setContentAreaFilled(false);
+        stockAlert.setFocusPainted(false);
+        stockAlert.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        stockAlert.addActionListener(event -> showLowStockProducts());
         alert.add(dot, BorderLayout.WEST); alert.add(stockAlert, BorderLayout.CENTER);
         header.add(alert, BorderLayout.EAST);
         return header;
+    }
+
+    private JPanel buildInventoryPanel() {
+        JPanel panel = cardPanel();
+        panel.setLayout(new BorderLayout(0, 14));
+
+        JPanel titleBar = new JPanel(new BorderLayout(12, 0));
+        titleBar.setOpaque(false);
+        titleBar.add(sectionHeading("Inventory management", "Maintain product details and keep shelf stock current"), BorderLayout.CENTER);
+        JButton add = primaryButton("＋ Add product");
+        add.addActionListener(event -> showProductEditor(null));
+        titleBar.add(add, BorderLayout.EAST);
+        panel.add(titleBar, BorderLayout.NORTH);
+
+        JPanel content = new JPanel(new BorderLayout(0, 10));
+        content.setOpaque(false);
+        inventorySearchField.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        inventorySearchField.setToolTipText("Search by product name or code");
+        inventorySearchField.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(BORDER), BorderFactory.createEmptyBorder(10, 12, 10, 12)));
+        content.add(inventorySearchField, BorderLayout.NORTH);
+
+        styleTable(inventoryTable);
+        inventoryTable.setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION);
+        inventoryTable.setFillsViewportHeight(true);
+        inventoryTable.setAutoCreateRowSorter(true);
+        JScrollPane scroll = new JScrollPane(inventoryTable);
+        scroll.setBorder(BorderFactory.createLineBorder(BORDER));
+        content.add(scroll, BorderLayout.CENTER);
+
+        JPanel footer = new JPanel(new BorderLayout(12, 0));
+        footer.setOpaque(false);
+        JLabel stockNote = new JLabel("On-hand stock changes through sales and restocking.");
+        stockNote.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        stockNote.setForeground(MUTED);
+        footer.add(stockNote, BorderLayout.WEST);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        actions.setOpaque(false);
+        JButton edit = secondaryButton("Edit product");
+        edit.addActionListener(event -> editSelectedProduct());
+        JButton delete = secondaryButton("Delete");
+        delete.addActionListener(event -> deleteSelectedProduct());
+        JButton restock = primaryButton("Restock");
+        restock.addActionListener(event -> restockSelectedProduct());
+        actions.add(edit);
+        actions.add(delete);
+        actions.add(restock);
+        footer.add(actions, BorderLayout.EAST);
+        content.add(footer, BorderLayout.SOUTH);
+        panel.add(content, BorderLayout.CENTER);
+
+        inventorySearchField.getDocument().addDocumentListener(new DocumentListener() {
+            public void insertUpdate(DocumentEvent event) { filterInventoryProducts(); }
+            public void removeUpdate(DocumentEvent event) { filterInventoryProducts(); }
+            public void changedUpdate(DocumentEvent event) { filterInventoryProducts(); }
+        });
+        inventoryTable.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mouseClicked(java.awt.event.MouseEvent event) {
+                if (event.getClickCount() == 2) editSelectedProduct();
+            }
+        });
+        return panel;
     }
 
     private JPanel buildCatalogPanel() {
@@ -235,6 +317,214 @@ public class SupermarketBillingApp extends JFrame {
         }
     }
 
+    private void filterInventoryProducts() {
+        String query = inventorySearchField.getText().trim().toLowerCase(Locale.ROOT);
+        List<Product> filtered = billingService.getProducts().stream()
+                .filter(product -> product.getName().toLowerCase(Locale.ROOT).contains(query)
+                        || product.getCode().toLowerCase(Locale.ROOT).contains(query))
+                .collect(Collectors.toList());
+        inventoryModel.setProducts(filtered);
+    }
+
+    private Product selectedInventoryProduct() {
+        int viewRow = inventoryTable.getSelectedRow();
+        if (viewRow < 0) {
+            JOptionPane.showMessageDialog(this, "Select a product from the inventory first.",
+                    "Choose a product", JOptionPane.INFORMATION_MESSAGE);
+            return null;
+        }
+        return inventoryModel.getProductAt(inventoryTable.convertRowIndexToModel(viewRow));
+    }
+
+    private void editSelectedProduct() {
+        Product product = selectedInventoryProduct();
+        if (product != null) showProductEditor(product);
+    }
+
+    private void showProductEditor(Product existing) {
+        boolean isNew = existing == null;
+        JDialog dialog = new JDialog(this, isNew ? "Add product" : "Edit product", true);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        dialog.setLayout(new BorderLayout(0, 14));
+        JPanel content = new JPanel(new BorderLayout(0, 14));
+        content.setBackground(Color.WHITE);
+        content.setBorder(BorderFactory.createEmptyBorder(20, 22, 18, 22));
+
+        JPanel form = new JPanel(new GridBagLayout());
+        form.setOpaque(false);
+        JTextField codeField = new JTextField(isNew ? "" : existing.getCode(), 22);
+        codeField.setEditable(isNew);
+        JTextField nameField = new JTextField(isNew ? "" : existing.getName(), 22);
+        JComboBox<String> categoryField = new JComboBox<>(new String[] {"REGULAR", "PERISHABLE"});
+        if (!isNew) categoryField.setSelectedItem(existing.getCategory().toUpperCase(Locale.ROOT));
+        JTextField priceField = new JTextField(isNew ? "" : String.format(Locale.ROOT, "%.2f", existing.getUnitPrice()), 22);
+        JTextField expiryField = new JTextField(isNew || existing.getExpiryDate() == null
+                ? "" : existing.getExpiryDate().toString(), 22);
+        expiryField.setToolTipText("yyyy-MM-dd; leave blank if unknown");
+        JSpinner stockField = new JSpinner(new SpinnerNumberModel(
+                isNew ? 0 : existing.getStock(), 0, Integer.MAX_VALUE, 1));
+        if (!isNew) {
+            stockField.setEnabled(false);
+            stockField.setToolTipText("Use Restock to increase stock; sales reduce it at checkout.");
+        }
+
+        addFormRow(form, "Product code", codeField, 0);
+        addFormRow(form, "Product name", nameField, 1);
+        addFormRow(form, "Product type", categoryField, 2);
+        addFormRow(form, "Unit price (₹)", priceField, 3);
+        addFormRow(form, "Expiry date", expiryField, 4);
+        addFormRow(form, isNew ? "Opening stock" : "Current stock", stockField, 5);
+        JLabel hint = new JLabel(isNew
+                ? "Perishable expiry is optional. Leave it blank if unknown."
+                : "Product code is fixed; use Restock to add stock.");
+        hint.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        hint.setForeground(MUTED);
+        GridBagConstraints hintConstraints = new GridBagConstraints();
+        hintConstraints.gridx = 0; hintConstraints.gridy = 6; hintConstraints.gridwidth = 2;
+        hintConstraints.anchor = GridBagConstraints.WEST;
+        hintConstraints.insets = new Insets(10, 0, 0, 0);
+        form.add(hint, hintConstraints);
+
+        categoryField.addActionListener(event -> {
+            boolean perishable = "PERISHABLE".equals(categoryField.getSelectedItem());
+            expiryField.setEnabled(perishable);
+            if (!perishable) expiryField.setText("");
+        });
+        expiryField.setEnabled("PERISHABLE".equals(categoryField.getSelectedItem()));
+
+        content.add(sectionHeading(isNew ? "Create a product" : "Update product details",
+                isNew ? "Add the details used by the checkout counter"
+                        : "Update catalog details; manage stock with Restock"), BorderLayout.NORTH);
+        content.add(form, BorderLayout.CENTER);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        actions.setOpaque(false);
+        JButton cancel = secondaryButton("Cancel");
+        cancel.addActionListener(event -> dialog.dispose());
+        JButton save = primaryButton(isNew ? "Add product" : "Save changes");
+        save.addActionListener(event -> {
+            try {
+                String code = codeField.getText().trim();
+                String name = nameField.getText().trim();
+                if (code.isEmpty() || code.length() > 24) {
+                    throw new IllegalArgumentException("Product code must contain 1 to 24 characters.");
+                }
+                if (name.isEmpty() || name.length() > 120) {
+                    throw new IllegalArgumentException("Product name must contain 1 to 120 characters.");
+                }
+                BigDecimal price = new BigDecimal(priceField.getText().trim()).setScale(2, RoundingMode.UNNECESSARY);
+                if (price.signum() < 0 || price.compareTo(new BigDecimal("99999999.99")) > 0) {
+                    throw new IllegalArgumentException("Unit price must be between ₹0.00 and ₹99,999,999.99.");
+                }
+                String category = (String) categoryField.getSelectedItem();
+                LocalDate expiry = null;
+                if ("PERISHABLE".equals(category) && !expiryField.getText().trim().isEmpty()) {
+                    try {
+                        expiry = LocalDate.parse(expiryField.getText().trim());
+                    } catch (DateTimeParseException exception) {
+                        throw new IllegalArgumentException("Enter expiry as yyyy-MM-dd, or leave it blank.");
+                    }
+                }
+                int stock = isNew ? (Integer) stockField.getValue() : existing.getStock();
+                Product product = "PERISHABLE".equals(category)
+                        ? new PerishableProduct(code, name, price.doubleValue(), stock, expiry)
+                        : new RegularProduct(code, name, price.doubleValue(), stock);
+                if (isNew) billingService.createProduct(product);
+                else billingService.updateProduct(product);
+                refreshTables();
+                dialog.dispose();
+                JOptionPane.showMessageDialog(this, isNew ? "Product added to inventory." : "Product details updated.",
+                        "Inventory saved", JOptionPane.INFORMATION_MESSAGE);
+            } catch (NumberFormatException | ArithmeticException exception) {
+                showError("Enter a valid unit price with up to two decimal places.");
+            } catch (IllegalArgumentException | SQLException exception) {
+                showError(exception.getMessage());
+            }
+        });
+        actions.add(cancel);
+        actions.add(save);
+        content.add(actions, BorderLayout.SOUTH);
+        dialog.add(content, BorderLayout.CENTER);
+        dialog.getRootPane().setDefaultButton(save);
+        dialog.setSize(560, 480);
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+    }
+
+    private void addFormRow(JPanel form, String label, Component field, int row) {
+        GridBagConstraints left = new GridBagConstraints();
+        left.gridx = 0; left.gridy = row; left.anchor = GridBagConstraints.WEST;
+        left.insets = new Insets(6, 0, 6, 14);
+        JLabel text = new JLabel(label);
+        text.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        text.setForeground(INK);
+        form.add(text, left);
+
+        if (field instanceof JTextField) {
+            ((JTextField) field).setFont(new Font("Segoe UI", Font.PLAIN, 13));
+            ((JTextField) field).setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(BORDER), BorderFactory.createEmptyBorder(8, 9, 8, 9)));
+        }
+        GridBagConstraints right = new GridBagConstraints();
+        right.gridx = 1; right.gridy = row; right.weightx = 1;
+        right.fill = GridBagConstraints.HORIZONTAL; right.insets = new Insets(6, 0, 6, 0);
+        form.add(field, right);
+    }
+
+    private void deleteSelectedProduct() {
+        Product product = selectedInventoryProduct();
+        if (product == null) return;
+        int answer = JOptionPane.showConfirmDialog(this,
+                "Delete “" + product.getName() + "” from the catalog? Existing receipts will remain saved.",
+                "Delete product", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (answer != JOptionPane.YES_OPTION) return;
+        try {
+            billingService.deleteProduct(product.getCode());
+            refreshTables();
+        } catch (IllegalArgumentException | SQLException exception) {
+            showError(exception.getMessage());
+        }
+    }
+
+    private void restockSelectedProduct() {
+        Product product = selectedInventoryProduct();
+        if (product == null) return;
+        JSpinner quantity = new JSpinner(new SpinnerNumberModel(10, 1, 1_000_000, 1));
+        JPanel prompt = new JPanel(new BorderLayout(10, 0));
+        prompt.add(new JLabel("Units to add to “" + product.getName() + "”:"), BorderLayout.CENTER);
+        prompt.add(quantity, BorderLayout.EAST);
+        int answer = JOptionPane.showConfirmDialog(this, prompt, "Restock product",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+        try {
+            int amount = (Integer) quantity.getValue();
+            billingService.restockProduct(product.getCode(), amount);
+            refreshTables();
+            JOptionPane.showMessageDialog(this, product.getName() + " restocked. New on-hand quantity: "
+                            + product.getStock() + ".",
+                    "Restock complete", JOptionPane.INFORMATION_MESSAGE);
+        } catch (IllegalArgumentException | SQLException exception) {
+            showError(exception.getMessage());
+        }
+    }
+
+    private void showLowStockProducts() {
+        List<Product> lowStock = billingService.getLowStockProducts();
+        workspaceTabs.setSelectedIndex(1);
+        if (lowStock.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "All products are above the low-stock threshold of 5 units.",
+                    "Stock levels", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        StringBuilder message = new StringBuilder("Products at or below 5 available units:\n\n");
+        for (Product product : lowStock) {
+            message.append(product.getCode()).append("  ·  ").append(product.getName())
+                    .append("  —  ").append(billingService.getAvailableStock(product)).append(" available\n");
+        }
+        message.append("\nSelect a product and choose Restock in Inventory.");
+        JOptionPane.showMessageDialog(this, message.toString(), "Low-stock notification",
+                JOptionPane.WARNING_MESSAGE);
+    }
+
     private void removeSelectedItem() {
         int row = cartTable.getSelectedRow();
         if (row < 0) {
@@ -250,7 +540,7 @@ public class SupermarketBillingApp extends JFrame {
             Bill bill = billingService.checkout(customerField.getText());
             refreshTables();
             showReceipt(bill);
-        } catch (IllegalStateException exception) {
+        } catch (IllegalStateException | SQLException exception) {
             showError(exception.getMessage());
         }
     }
@@ -303,12 +593,16 @@ public class SupermarketBillingApp extends JFrame {
 
     private void refreshTables() {
         filterProducts();
+        filterInventoryProducts();
         cartModel.setItems(billingService.getCartItems());
         subtotalValue.setText(money(billingService.getSubtotal()));
         discountValue.setText("-" + money(billingService.getDiscountTotal()));
         totalValue.setText(money(billingService.getTotal()));
         int lowStock = billingService.getLowStockCount();
-        stockAlert.setText(lowStock == 0 ? "All products are sufficiently stocked" : lowStock + " product(s) need restocking soon");
+        stockAlert.setText(lowStock == 0
+                ? "All stock healthy · click to review"
+                : "Low stock: " + lowStock + " product(s) · click to review");
+        stockAlert.setForeground(lowStock == 0 ? GREEN : new Color(119, 78, 25));
     }
 
     private void showError(String message) {
@@ -368,12 +662,20 @@ public class SupermarketBillingApp extends JFrame {
         right.setHorizontalAlignment(SwingConstants.RIGHT);
         if (table == productTable) {
             table.getColumnModel().getColumn(2).setCellRenderer(right);
-            table.getColumnModel().getColumn(3).setCellRenderer(right);
-            table.getColumnModel().getColumn(4).setCellRenderer(right);
+            table.getColumnModel().getColumn(3).setCellRenderer(stockRenderer());
             table.getColumnModel().getColumn(0).setPreferredWidth(76);
             table.getColumnModel().getColumn(1).setPreferredWidth(150);
             table.getColumnModel().getColumn(2).setPreferredWidth(82);
             table.getColumnModel().getColumn(3).setPreferredWidth(82);
+        } else if (table == inventoryTable) {
+            table.getColumnModel().getColumn(3).setCellRenderer(right);
+            table.getColumnModel().getColumn(4).setCellRenderer(stockRenderer());
+            table.getColumnModel().getColumn(0).setPreferredWidth(100);
+            table.getColumnModel().getColumn(1).setPreferredWidth(260);
+            table.getColumnModel().getColumn(2).setPreferredWidth(110);
+            table.getColumnModel().getColumn(3).setPreferredWidth(120);
+            table.getColumnModel().getColumn(4).setPreferredWidth(110);
+            table.getColumnModel().getColumn(5).setPreferredWidth(150);
         } else {
             for (int i = 1; i < table.getColumnCount(); i++) table.getColumnModel().getColumn(i).setCellRenderer(right);
             table.getColumnModel().getColumn(0).setPreferredWidth(120);
@@ -381,26 +683,29 @@ public class SupermarketBillingApp extends JFrame {
         }
     }
 
-    private static String money(double amount) { return String.format(Locale.forLanguageTag("en-IN"), "₹%,.2f", amount); }
-
-    private static List<Product> createSampleProducts() {
-        LocalDate today = LocalDate.now();
-        List<Product> products = new ArrayList<>();
-        products.add(new RegularProduct("100101", "Basmati Rice 1 kg", 118.00, 42));
-        products.add(new RegularProduct("100102", "Wheat Flour 1 kg", 62.00, 28));
-        products.add(new RegularProduct("100103", "Tea 250 g", 145.00, 31));
-        products.add(new RegularProduct("100104", "Dishwash Liquid", 99.00, 2));
-        products.add(new RegularProduct("100105", "Pasta 500 g", 78.00, 18));
-        products.add(new PerishableProduct("200201", "Fresh Milk 1 L", 68.00, 12, today.plusDays(5)));
-        products.add(new PerishableProduct("200202", "Whole Wheat Bread", 45.00, 5, today.plusDays(1)));
-        products.add(new PerishableProduct("200203", "Plain Yogurt 400 g", 72.00, 14, today.plusDays(3)));
-        products.add(new PerishableProduct("200204", "Apples 1 kg", 165.00, 9, today.plusDays(10)));
-        products.add(new PerishableProduct("200205", "Cheddar Cheese 200 g", 132.00, 4, today.plusDays(6)));
-        return products;
+    private DefaultTableCellRenderer stockRenderer() {
+        return new DefaultTableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(JTable table, Object value, boolean selected,
+                                                           boolean focused, int row, int column) {
+                super.getTableCellRendererComponent(table, value, selected, focused, row, column);
+                setHorizontalAlignment(SwingConstants.RIGHT);
+                if (!selected && value instanceof Number && ((Number) value).intValue() <= 5) {
+                    setForeground(ORANGE);
+                    setFont(getFont().deriveFont(Font.BOLD));
+                } else if (!selected) {
+                    setForeground(INK);
+                    setFont(getFont().deriveFont(Font.PLAIN));
+                }
+                return this;
+            }
+        };
     }
 
+    private static String money(double amount) { return String.format(Locale.forLanguageTag("en-IN"), "₹%,.2f", amount); }
+
     private class ProductTableModel extends AbstractTableModel {
-        private final String[] columns = {"CODE", "PRODUCT", "PRICE", "STOCK", "BEST BEFORE"};
+        private final String[] columns = {"CODE", "PRODUCT", "PRICE", "AVAILABLE", "BEST BEFORE"};
         private List<Product> rows = new ArrayList<>();
         public void setProducts(List<Product> products) { rows = new ArrayList<>(products); fireTableDataChanged(); }
         public Product getProductAt(int row) { return rows.get(row); }
@@ -413,8 +718,31 @@ public class SupermarketBillingApp extends JFrame {
                 case 0: return product.getCode();
                 case 1: return product.getName();
                 case 2: return money(product.getUnitPrice());
-                case 3: return product.getStock();
+                case 3: return billingService.getAvailableStock(product);
                 case 4: return product.getExpiryDate() == null ? "—" : product.getExpiryDate().format(DateTimeFormatter.ofPattern("dd MMM"));
+                default: return "";
+            }
+        }
+    }
+
+    private class InventoryTableModel extends AbstractTableModel {
+        private final String[] columns = {"CODE", "PRODUCT", "TYPE", "UNIT PRICE", "ON HAND", "EXPIRY DATE"};
+        private List<Product> rows = new ArrayList<>();
+        public void setProducts(List<Product> products) { rows = new ArrayList<>(products); fireTableDataChanged(); }
+        public Product getProductAt(int row) { return rows.get(row); }
+        @Override public int getRowCount() { return rows.size(); }
+        @Override public int getColumnCount() { return columns.length; }
+        @Override public String getColumnName(int col) { return columns[col]; }
+        @Override public Object getValueAt(int row, int col) {
+            Product product = rows.get(row);
+            switch (col) {
+                case 0: return product.getCode();
+                case 1: return product.getName();
+                case 2: return product.getCategory();
+                case 3: return money(product.getUnitPrice());
+                case 4: return product.getStock();
+                case 5: return product.getExpiryDate() == null ? "—"
+                        : product.getExpiryDate().format(DateTimeFormatter.ofPattern("dd MMM yyyy"));
                 default: return "";
             }
         }
@@ -446,7 +774,24 @@ public class SupermarketBillingApp extends JFrame {
         SwingUtilities.invokeLater(() -> {
             try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); }
             catch (Exception ignored) { }
-            new SupermarketBillingApp().setVisible(true);
+            try {
+                ProductRepository repository = new MySqlProductRepository(DatabaseConnection.load());
+                BillingService billingService = new BillingService(repository);
+                if (billingService.getProducts().isEmpty()) {
+                    JOptionPane.showMessageDialog(null,
+                            "MySQL connected, but the product table is empty. Run database/schema.sql first.",
+                            "No products found", JOptionPane.INFORMATION_MESSAGE);
+                    return;
+                }
+                new SupermarketBillingApp(billingService).setVisible(true);
+            } catch (IOException | SQLException exception) {
+                JOptionPane.showMessageDialog(null,
+                        "Could not load the product catalog from MySQL.\n\n"
+                                + "Check that MySQL Server is running, database/schema.sql has been executed, "
+                                + "and config/db.properties has the correct username and password.\n\n"
+                                + "Details: " + exception.getMessage(),
+                        "MySQL connection failed", JOptionPane.ERROR_MESSAGE);
+            }
         });
     }
 }

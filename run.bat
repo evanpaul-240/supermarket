@@ -1,16 +1,28 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
+setlocal
 cd /d "%~dp0"
-if not exist out mkdir out
-set SOURCES=
-for %%F in (src\*.java) do set SOURCES=!SOURCES! "%%F"
-javac -encoding UTF-8 -d out %SOURCES%
+
+where mvn >nul 2>nul
 if errorlevel 1 (
-    echo.
-    echo Compilation failed. Make sure a Java JDK is installed and javac is on PATH.
+    echo Maven was not found. Install Apache Maven 3.9 or later and reopen Command Prompt.
     pause
     exit /b 1
 )
-java -cp out SupermarketBillingApp
-if errorlevel 1 pause
+
+if not exist config\db.properties (
+    copy config\db.properties.example config\db.properties >nul
+    echo Created config\db.properties from the example.
+    echo Edit that file with your MySQL username and password, then run run.bat again.
+    pause
+    exit /b 1
+)
+
+mvn -q compile exec:java
+if errorlevel 1 (
+    echo.
+    echo The application could not start. Check the MySQL server, database setup, and credentials.
+    pause
+    exit /b 1
+)
+
 endlocal

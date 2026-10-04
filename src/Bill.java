@@ -17,6 +17,8 @@ public class Bill {
     }
 
     public String getBillNumber() { return billNumber; }
+    public String getCustomerName() { return customerName; }
+    public LocalDateTime getCreatedAt() { return createdAt; }
     public List<BillLine> getLines() { return lines; }
     public double getSubtotal() { return lines.stream().mapToDouble(BillLine::getGrossAmount).sum(); }
     public double getDiscountTotal() { return lines.stream().mapToDouble(BillLine::getDiscount).sum(); }

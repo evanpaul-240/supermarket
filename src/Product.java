@@ -38,4 +38,10 @@ public abstract class Product {
         stock -= quantity;
         return true;
     }
+
+    public boolean increaseStock(int quantity) {
+        if (quantity < 1 || (long) stock + quantity > Integer.MAX_VALUE) return false;
+        stock += quantity;
+        return true;
+    }
 }
